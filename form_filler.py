@@ -9,7 +9,7 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 
 # Import the email-handling functions from our other script
-from app import create_mailtm_account, wait_for_verification_email
+from email_handler import create_mailtm_account, wait_for_verification_email
 
 def generate_random_string(length=8):
     """Generates a random string of letters for names."""
