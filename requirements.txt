@@ -1,4 +1,6 @@
 requests
 selenium
 webdriver-manager
-beautifulsoup4 
+beautifulsoup4
+ollama
+python-dotenv 

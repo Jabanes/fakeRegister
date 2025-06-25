@@ -6,6 +6,8 @@ import re
 import json
 from datetime import datetime
 from bs4 import BeautifulSoup
+import os
+from dotenv import load_dotenv
 
 def save_verified_email(email, password, url):
     data = []
@@ -113,11 +115,44 @@ def find_verification_link(html_content):
 
     return None
 
-def wait_for_verification_email(email, password):
-    print("\n⏳ Waiting for a verification email...")
+def save_credentials(email, password, name, website_url):
+    """Saves the verified credentials to a JSON file."""
+    file_path = "verifiedEmails.json"
+    
+    # Read existing data
+    try:
+        with open(file_path, "r") as f:
+            data = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        data = []
+        
+    # Add new entry
+    data.append({
+        "name": name,
+        "email": email,
+        "password": password,
+        "website_url": website_url,
+        "timestamp": datetime.now().isoformat()
+    })
+    
+    # Write back to file
+    with open(file_path, "w") as f:
+        json.dump(data, f, indent=4)
+    
+    print(f"💾 Saved verified email to verifiedEmails.json")
+
+def wait_for_verification_email(driver, email, password, name):
+    """
+    Waits for a verification email, extracts the link, and uses Selenium to visit it.
+    Returns True if verification is successful, False otherwise.
+    """
+    print("⏳ Waiting for a verification email...")
+    
+    # Get the authentication token for the new email address
+    # This requires the password we just created
     token = get_auth_token(email, password)
     if not token:
-        return
+        return False
 
     start_time = time.time()
     while time.time() - start_time < 300:  # Wait for 5 minutes
@@ -155,24 +190,49 @@ def wait_for_verification_email(email, password):
                         print("✅ Verification successful!")
                         print(f"    Final URL: {verify_response.url}")
                         print(f"    Status code: {verify_response.status_code}")
-                        save_verified_email(email, password, "https://www.shippuden.store/")
+                        save_credentials(email, password, name, verify_response.url)
+                        return True # Exit after processing the first email
                     except requests.exceptions.RequestException as e:
                         print(f"❌ Verification failed: {e}")
-                    return # Exit after processing the first email
+                    return False
                 else:
                     print("❌ No verification link found in the email.")
-                    return
+                    return False
             except requests.exceptions.RequestException as e:
                 print(f"❌ Error getting message content: {e}")
 
+        if not messages:
+            time.sleep(10)
+            continue
+
+        # If we get here, it means a message has arrived.
+        # For this site, receiving any email confirms registration.
+        print(f"✅ Confirmation email received: '{messages[0]['subject']}'")
+        
+        load_dotenv()
+        website_url = os.getenv("LOGIN_URL")
+        if website_url:
+            save_credentials(email, password, name, website_url)
+            print("🎉 Account is considered verified and credentials have been saved!")
+        else:
+            print("⚠️ Could not find LOGIN_URL in .env file. Credentials not saved.")
+        
+        return True # Success
+
+    except requests.exceptions.RequestException as e:
+        print(f"❌ Error checking for email: {e}")
         time.sleep(10)
+    
+    print("❌ Timed out waiting for confirmation email.")
+    return False
 
-    print("🤷 No email received within 5 minutes.")
-
-
-# Run it
-if __name__ == "__main__":
+def main():
+    """For testing the email handler functions directly."""
     new_email, password = create_mailtm_account()
     if new_email:
         print(f"📧 Use this email: {new_email}")
-        wait_for_verification_email(new_email, password)
+        print("NOTE: Direct testing of wait_for_verification_email requires a live driver object and name.")
+
+# Run it
+if __name__ == "__main__":
+    main()

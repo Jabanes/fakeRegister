@@ -1,68 +1,98 @@
 import time
 import random
 import string
+import json
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.service import Service as ChromeService
 from webdriver_manager.chrome import ChromeDriverManager
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
+from bs4 import BeautifulSoup
 
 # Import the email-handling functions from our other script
 from email_handler import create_mailtm_account, wait_for_verification_email
+
+# Import our AI agent's analysis and correction functions
+from agent import analyze_form_with_ai, get_corrected_selectors_from_ai
 
 def generate_random_string(length=8):
     """Generates a random string of letters for names."""
     return ''.join(random.choices(string.ascii_lowercase, k=length))
 
-def fill_out_and_submit_form(driver, email, password):
-    """Navigates to the form, fills it out with random data, and submits it."""
-    
-    url = "https://www.shippuden.store/%D7%94%D7%A8%D7%A9%D7%9E%D7%94"
-    print(f"Navigating to {url}")
-    driver.get(url)
+def fill_out_and_submit_form(driver, register_url, email, password):
+    """
+    Tries to fill the form with known selectors and confirms submission by
+    checking for a URL change. If it fails, it asks the AI for a correction.
+    """
+    selectors = {
+        "name_selector": "#jform_name",
+        "email_selector": "#jform_email1",
+        "password_selector": "#jform_password1",
+        "submit_button_selector": "button[type='submit']"
+    }
 
     try:
-        # Wait for the form to be visible
-        WebDriverWait(driver, 10).until(EC.visibility_of_element_located((By.ID, "registerForm")))
-        print("Form is visible. Starting to fill out fields.")
+        with open('register.html', 'r', encoding='utf-8') as f:
+            html_content = f.read()
+    except FileNotFoundError:
+        print("⚠️ Warning: register.html not found. AI correction will not be possible.")
+        html_content = ""
 
-        # Fill in the form fields using their IDs
-        driver.find_element(By.ID, "regFName").send_keys(generate_random_string())
-        driver.find_element(By.ID, "regLName").send_keys(generate_random_string())
-        driver.find_element(By.ID, "regDisplay").send_keys(generate_random_string(10))
-        driver.find_element(By.ID, "regEmail").send_keys(email)
+    max_retries = 3
+    for attempt in range(max_retries):
+        print(f"\n--- Filling Form: Attempt {attempt + 1} of {max_retries} ---")
+        if attempt > 0:
+            print("🔍 Using Corrected Selectors:")
+        else:
+            print("🔍 Using Initial Selectors:")
+        print(json.dumps(selectors, indent=2))
         
-        # Passwords
-        driver.find_element(By.ID, "regPassword").send_keys(password)
-        driver.find_element(By.ID, "regPasswordRe").send_keys(password)
-        
-        # Shipping info
-        driver.find_element(By.ID, "regPhone").send_keys("0523021828")
-        driver.find_element(By.ID, "regCity").send_keys("Givatayim") # Example city
-        driver.find_element(By.ID, "regAddress").send_keys("Katsenelson St 74") # Example address
+        driver.get(register_url)
+        time.sleep(3) 
+        current_url = driver.current_url
+        print(f"\nNavigating to live site: {current_url}")
 
-        # Agree to terms
-        # Use JavaScript click to bypass potential interception
-        terms_checkbox = driver.find_element(By.ID, "termsSwitch")
-        driver.execute_script("arguments[0].scrollIntoView(true);", terms_checkbox)
-        time.sleep(0.5)
-        driver.execute_script("arguments[0].click();", terms_checkbox)
-        
-        print("All fields filled. Submitting the form.")
-        
-        # Submit the form using a more robust method
-        submit_button = WebDriverWait(driver, 10).until(EC.element_to_be_clickable((By.ID, "loginBtn")))
-        driver.execute_script("arguments[0].scrollIntoView(true);", submit_button)
-        time.sleep(0.5) # Wait for any overlays to disappear after scroll
-        driver.execute_script("arguments[0].click();", submit_button)
-        
-        print("✅ Form submitted successfully.")
-        return True
+        try:
+            # Fill in all required fields, including the name
+            name = generate_random_string()
+            if selectors.get("name_selector"):
+                driver.find_element(By.CSS_SELECTOR, selectors["name_selector"]).send_keys(name)
+            if selectors.get("email_selector"):
+                driver.find_element(By.CSS_SELECTOR, selectors["email_selector"]).send_keys(email)
+            if selectors.get("password_selector"):
+                driver.find_element(By.CSS_SELECTOR, selectors["password_selector"]).send_keys(password)
+            
+            # Click the submit button
+            if selectors.get("submit_button_selector"):
+                submit_button = driver.find_element(By.CSS_SELECTOR, selectors["submit_button_selector"])
+                driver.execute_script("arguments[0].click();", submit_button)
+            else:
+                raise Exception("No submit button selector found.")
+            
+            # *** The new, more intelligent success check ***
+            print("✅ Form submitted. Now waiting for URL to change...")
+            WebDriverWait(driver, 10).until(lambda driver: driver.current_url != current_url)
+            
+            print("🎉 URL changed! Submission confirmed.")
+            return True, name
 
-    except Exception as e:
-        print(f"❌ An error occurred while filling the form: {e}")
-        return False
+        except Exception as e:
+            error_message = str(e)
+            print(f"❌ An error occurred on attempt {attempt + 1}:\n{error_message.splitlines()[0]}")
+            
+            if attempt < max_retries - 1:
+                print("Asking AI for a correction...")
+                corrected_selectors = get_corrected_selectors_from_ai(html_content, selectors, error_message)
+                if corrected_selectors:
+                    selectors = corrected_selectors
+                else:
+                    print("AI correction failed. Aborting.")
+                    break
+            else:
+                print("❌ Max retries reached. Could not fill the form.")
+    
+    return False, None
 
 def main():
     """Main function to orchestrate the bot."""
@@ -80,7 +110,7 @@ def main():
     # 2. Set up Selenium and fill out the form
     print("\n--- Step 2: Filling out registration form ---")
     driver = webdriver.Chrome(service=ChromeService(ChromeDriverManager().install()))
-    form_submitted = fill_out_and_submit_form(driver, email, password)
+    form_submitted, name = fill_out_and_submit_form(driver, "https://www.shippuden.store/%D7%94%D7%A8%D7%A9%D7%9E%D7%94", email, password)
     
     # Give a moment for the submission to process before closing browser
     time.sleep(5)
